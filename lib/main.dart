@@ -43,6 +43,7 @@ class ChotHomePage extends StatefulWidget {
 class _ChotHomePageState extends State<ChotHomePage> {
   static const _stateStorageKey = 'chot_notes_state_v1';
   static const _legacyMessagesKey = 'chot_messages';
+  static const _sendShortcutKey = 'chot_send_shortcut_v1';
   static const _wideLayoutWidth = 920.0;
   static const _threadPaneWidth = 360.0;
 
@@ -56,6 +57,7 @@ class _ChotHomePageState extends State<ChotHomePage> {
   List<MemoNote> _notes = const [];
   String? _selectedNoteId;
   String? _selectedThreadRootId;
+  SendShortcutMode _sendShortcutMode = SendShortcutMode.enter;
   bool _isLoading = true;
 
   MemoNote? get _selectedNote {
@@ -109,6 +111,9 @@ class _ChotHomePageState extends State<ChotHomePage> {
   Future<void> _loadState() async {
     final prefs = await SharedPreferences.getInstance();
     final encodedState = prefs.getString(_stateStorageKey);
+    final storedSendShortcut = prefs.getString(_sendShortcutKey);
+
+    _sendShortcutMode = SendShortcutMode.fromStorageValue(storedSendShortcut);
 
     List<MemoNote>? notes;
     String? selectedNoteId;
@@ -514,6 +519,19 @@ class _ChotHomePageState extends State<ChotHomePage> {
     );
   }
 
+  Future<void> _updateSendShortcutMode(SendShortcutMode mode) async {
+    if (_sendShortcutMode == mode) {
+      return;
+    }
+
+    setState(() {
+      _sendShortcutMode = mode;
+    });
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_sendShortcutKey, mode.storageValue);
+  }
+
   Future<void> _renameCurrentNote() async {
     final note = _selectedNote;
     if (note == null) {
@@ -703,6 +721,25 @@ class _ChotHomePageState extends State<ChotHomePage> {
                 onPressed: _copyCurrentNoteAsMarkdown,
                 icon: const Icon(Icons.content_copy_rounded),
               ),
+              PopupMenuButton<SendShortcutMode>(
+                tooltip: '送信キー設定',
+                initialValue: _sendShortcutMode,
+                onSelected: (mode) async {
+                  await _updateSendShortcutMode(mode);
+                },
+                itemBuilder: (context) {
+                  return SendShortcutMode.values
+                      .map(
+                        (mode) => CheckedPopupMenuItem<SendShortcutMode>(
+                          value: mode,
+                          checked: mode == _sendShortcutMode,
+                          child: Text(mode.menuLabel),
+                        ),
+                      )
+                      .toList();
+                },
+                icon: const Icon(Icons.keyboard_return_rounded),
+              ),
               IconButton(
                 tooltip: '新規ノート',
                 onPressed: _createNote,
@@ -773,6 +810,7 @@ class _ChotHomePageState extends State<ChotHomePage> {
                                         _pickImage(forThread: true),
                                     onClearImage: () =>
                                         _clearPendingImage(forThread: true),
+                                    sendShortcutMode: _sendShortcutMode,
                                     onSendReply: _sendThreadReply,
                                   )
                                 : _NoteConversation(
@@ -787,6 +825,7 @@ class _ChotHomePageState extends State<ChotHomePage> {
                                         _pickImage(forThread: false),
                                     onClearImage: () =>
                                         _clearPendingImage(forThread: false),
+                                    sendShortcutMode: _sendShortcutMode,
                                     textController: _textController,
                                     scrollController: _scrollController,
                                     onSend: _sendMessage,
@@ -817,6 +856,7 @@ class _ChotHomePageState extends State<ChotHomePage> {
                             onPickImage: () => _pickImage(forThread: true),
                             onClearImage: () =>
                                 _clearPendingImage(forThread: true),
+                            sendShortcutMode: _sendShortcutMode,
                             onSendReply: _sendThreadReply,
                           ),
                         ),
@@ -1008,6 +1048,7 @@ class _NoteConversation extends StatelessWidget {
     required this.selectedImagePath,
     required this.onPickImage,
     required this.onClearImage,
+    required this.sendShortcutMode,
     required this.textController,
     required this.scrollController,
     required this.onSend,
@@ -1022,6 +1063,7 @@ class _NoteConversation extends StatelessWidget {
   final String? selectedImagePath;
   final Future<void> Function() onPickImage;
   final VoidCallback onClearImage;
+  final SendShortcutMode sendShortcutMode;
   final TextEditingController textController;
   final ScrollController scrollController;
   final Future<void> Function() onSend;
@@ -1103,16 +1145,32 @@ class _NoteConversation extends StatelessWidget {
                         icon: const Icon(Icons.image_outlined),
                       ),
                       Expanded(
-                        child: TextField(
-                          controller: textController,
-                          minLines: 1,
-                          maxLines: 6,
-                          textInputAction: TextInputAction.newline,
-                          decoration: InputDecoration(
-                            hintText: '${currentNote.title} にメッセージを書く...',
-                            border: InputBorder.none,
+                        child: CallbackShortcuts(
+                          bindings: buildSendShortcutBindings(
+                            mode: sendShortcutMode,
+                            onSend: onSend,
                           ),
-                          onSubmitted: (_) => onSend(),
+                          child: Focus(
+                            onKeyEvent: (node, event) {
+                              return handleComposerKeyEvent(
+                                mode: sendShortcutMode,
+                                event: event,
+                                controller: textController,
+                                onSend: onSend,
+                              );
+                            },
+                            child: TextField(
+                              controller: textController,
+                              minLines: 1,
+                              maxLines: 6,
+                              textInputAction: TextInputAction.newline,
+                              decoration: InputDecoration(
+                                hintText: '${currentNote.title} にメッセージを書く...',
+                                helperText: sendShortcutMode.helperText,
+                                border: InputBorder.none,
+                              ),
+                            ),
+                          ),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -1149,6 +1207,7 @@ class _ThreadView extends StatelessWidget {
     required this.selectedImagePath,
     required this.onPickImage,
     required this.onClearImage,
+    required this.sendShortcutMode,
     required this.onSendReply,
   });
 
@@ -1163,6 +1222,7 @@ class _ThreadView extends StatelessWidget {
   final String? selectedImagePath;
   final Future<void> Function() onPickImage;
   final VoidCallback onClearImage;
+  final SendShortcutMode sendShortcutMode;
   final Future<void> Function() onSendReply;
 
   @override
@@ -1268,18 +1328,34 @@ class _ThreadView extends StatelessWidget {
                           icon: const Icon(Icons.image_outlined),
                         ),
                         Expanded(
-                          child: TextField(
-                            controller: textController,
-                            minLines: 1,
-                            maxLines: 5,
-                            textInputAction: TextInputAction.newline,
-                            decoration: InputDecoration(
-                              hintText: currentNote == null
-                                  ? 'スレッドに返信する...'
-                                  : '${currentNote.title} のスレッドに返信する...',
-                              border: InputBorder.none,
+                          child: CallbackShortcuts(
+                            bindings: buildSendShortcutBindings(
+                              mode: sendShortcutMode,
+                              onSend: onSendReply,
                             ),
-                            onSubmitted: (_) => onSendReply(),
+                            child: Focus(
+                              onKeyEvent: (node, event) {
+                                return handleComposerKeyEvent(
+                                  mode: sendShortcutMode,
+                                  event: event,
+                                  controller: textController,
+                                  onSend: onSendReply,
+                                );
+                              },
+                              child: TextField(
+                                controller: textController,
+                                minLines: 1,
+                                maxLines: 5,
+                                textInputAction: TextInputAction.newline,
+                                decoration: InputDecoration(
+                                  hintText: currentNote == null
+                                      ? 'スレッドに返信する...'
+                                      : '${currentNote.title} のスレッドに返信する...',
+                                  helperText: sendShortcutMode.helperText,
+                                  border: InputBorder.none,
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                         FilledButton(
@@ -1422,7 +1498,7 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-class _MessageBubble extends StatelessWidget {
+class _MessageBubble extends StatefulWidget {
   const _MessageBubble({
     required this.message,
     required this.replyCount,
@@ -1440,135 +1516,180 @@ class _MessageBubble extends StatelessWidget {
   final Future<void> Function() onDelete;
 
   @override
+  State<_MessageBubble> createState() => _MessageBubbleState();
+}
+
+class _MessageBubbleState extends State<_MessageBubble> {
+  bool _isHovered = false;
+
+  @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final timeLabel = _formatTime(message.createdAt);
+    final timeLabel = _formatTime(widget.message.createdAt);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: colorScheme.primaryContainer,
-            child: Icon(
-              Icons.person_rounded,
-              size: 18,
-              color: colorScheme.primary,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _isHovered = true),
+        onExit: (_) => setState(() => _isHovered = false),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Text(
-                      'you',
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      timeLabel,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                            color: Colors.black45,
-                          ),
-                    ),
-                    const Spacer(),
-                    PopupMenuButton<_MessageMenuAction>(
-                      tooltip: '投稿メニュー',
-                      onSelected: (action) async {
-                        switch (action) {
-                          case _MessageMenuAction.edit:
-                            await onEdit();
-                          case _MessageMenuAction.delete:
-                            await onDelete();
-                        }
-                      },
-                      itemBuilder: (context) {
-                        return const [
-                          PopupMenuItem(
-                            value: _MessageMenuAction.edit,
-                            child: Text('編集'),
-                          ),
-                          PopupMenuItem(
-                            value: _MessageMenuAction.delete,
-                            child: Text('削除'),
-                          ),
-                        ];
-                      },
-                      icon: const Icon(Icons.more_horiz_rounded),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: isThreadActive
-                          ? colorScheme.primary
-                          : colorScheme.outlineVariant.withAlpha(110),
-                    ),
+                CircleAvatar(
+                  radius: 18,
+                  backgroundColor: colorScheme.primaryContainer,
+                  child: Icon(
+                    Icons.person_rounded,
+                    size: 18,
+                    color: colorScheme.primary,
                   ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 12,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (message.imagePath != null) ...[
-                          _MessageImage(path: message.imagePath!),
-                          if (message.text.isNotEmpty)
-                            const SizedBox(height: 10),
-                        ],
-                        if (message.text.isNotEmpty)
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
                           Text(
-                            message.text,
-                            style: const TextStyle(
-                              color: Color(0xFF18181B),
-                              height: 1.5,
+                            'you',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleSmall
+                                ?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            timeLabel,
+                            style: Theme.of(context)
+                                .textTheme
+                                .labelSmall
+                                ?.copyWith(
+                                  color: Colors.black45,
+                                ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: widget.isThreadActive
+                                ? colorScheme.primary
+                                : colorScheme.outlineVariant.withAlpha(110),
+                          ),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 12,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (widget.message.imagePath != null) ...[
+                                _MessageImage(path: widget.message.imagePath!),
+                                if (widget.message.text.isNotEmpty)
+                                  const SizedBox(height: 10),
+                              ],
+                              if (widget.message.text.isNotEmpty)
+                                Text(
+                                  widget.message.text,
+                                  style: const TextStyle(
+                                    color: Color(0xFF18181B),
+                                    height: 1.5,
+                                  ),
+                                ),
+                              if (widget.message.text.isEmpty &&
+                                  widget.message.imagePath != null)
+                                Text(
+                                  '画像を送信',
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      if (widget.replyCount > 0) ...[
+                        const SizedBox(height: 6),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: InkWell(
+                            onTap: widget.onOpenThread,
+                            borderRadius: BorderRadius.circular(8),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 2,
+                              ),
+                              child: Text(
+                                '返信 ${widget.replyCount}件',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .labelSmall
+                                    ?.copyWith(
+                                      color: Colors.black45,
+                                    ),
+                              ),
                             ),
                           ),
-                        if (message.text.isEmpty && message.imagePath != null)
-                          Text(
-                            '画像を送信',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
+                        ),
                       ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                TextButton.icon(
-                  onPressed: onOpenThread,
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    foregroundColor:
-                        isThreadActive ? colorScheme.primary : Colors.black54,
-                  ),
-                  icon: const Icon(Icons.forum_outlined, size: 18),
-                  label: Text(
-                    replyCount == 0 ? 'スレッドを開始' : '返信 $replyCount件',
+                    ],
                   ),
                 ),
               ],
             ),
-          ),
-        ],
+            Positioned(
+              top: -10,
+              right: 0,
+              child: IgnorePointer(
+                ignoring: !(_isHovered || widget.isThreadActive),
+                child: AnimatedOpacity(
+                  opacity: (_isHovered || widget.isThreadActive) ? 1 : 0,
+                  duration: const Duration(milliseconds: 120),
+                  child: _HoverActionBar(
+                    actions: [
+                      _HoverActionItem(
+                        icon: Icons.forum_outlined,
+                        label: widget.replyCount == 0 ? 'スレッド開始' : 'スレッド',
+                        onTap: widget.onOpenThread,
+                      ),
+                      _HoverActionItem(
+                        icon: Icons.edit_outlined,
+                        label: '編集',
+                        onTap: () {
+                          widget.onEdit();
+                        },
+                      ),
+                      _HoverActionItem(
+                        icon: Icons.delete_outline_rounded,
+                        label: '削除',
+                        isDestructive: true,
+                        onTap: () {
+                          widget.onDelete();
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _ThreadMessageCard extends StatelessWidget {
+class _ThreadMessageCard extends StatefulWidget {
   const _ThreadMessageCard({
     required this.message,
     required this.onEdit,
@@ -1582,120 +1703,306 @@ class _ThreadMessageCard extends StatelessWidget {
   final Future<void> Function() onDelete;
 
   @override
+  State<_ThreadMessageCard> createState() => _ThreadMessageCardState();
+}
+
+class _ThreadMessageCardState extends State<_ThreadMessageCard> {
+  bool _isHovered = false;
+
+  @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
 
     return Padding(
-      padding: EdgeInsets.only(bottom: isRoot ? 0 : 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          CircleAvatar(
-            radius: 16,
-            backgroundColor: isRoot
-                ? colorScheme.primaryContainer
-                : colorScheme.secondaryContainer,
-            child: Icon(
-              Icons.person_rounded,
-              size: 16,
-              color: isRoot ? colorScheme.primary : colorScheme.secondary,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
+      padding: EdgeInsets.only(bottom: widget.isRoot ? 0 : 10),
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _isHovered = true),
+        onExit: (_) => setState(() => _isHovered = false),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 2,
-                  children: [
-                    Text(
-                      isRoot ? '親投稿' : '返信',
-                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                    ),
-                    Text(
-                      _formatDateTime(message.createdAt),
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                            color: Colors.black45,
-                          ),
-                    ),
-                  ],
-                ),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: PopupMenuButton<_MessageMenuAction>(
-                    tooltip: 'スレッドメッセージメニュー',
-                    onSelected: (action) async {
-                      switch (action) {
-                        case _MessageMenuAction.edit:
-                          await onEdit();
-                        case _MessageMenuAction.delete:
-                          await onDelete();
-                      }
-                    },
-                    itemBuilder: (context) {
-                      return const [
-                        PopupMenuItem(
-                          value: _MessageMenuAction.edit,
-                          child: Text('編集'),
-                        ),
-                        PopupMenuItem(
-                          value: _MessageMenuAction.delete,
-                          child: Text('削除'),
-                        ),
-                      ];
-                    },
-                    icon: const Icon(Icons.more_horiz_rounded),
+                CircleAvatar(
+                  radius: 16,
+                  backgroundColor: widget.isRoot
+                      ? colorScheme.primaryContainer
+                      : colorScheme.secondaryContainer,
+                  child: Icon(
+                    Icons.person_rounded,
+                    size: 16,
+                    color: widget.isRoot
+                        ? colorScheme.primary
+                        : colorScheme.secondary,
                   ),
                 ),
-                const SizedBox(height: 4),
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: isRoot
-                        ? colorScheme.primaryContainer.withAlpha(120)
-                        : const Color(0xFFF7F7FB),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (message.imagePath != null) ...[
-                          _MessageImage(path: message.imagePath!),
-                          if (message.text.isNotEmpty)
-                            const SizedBox(height: 10),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 2,
+                        children: [
+                          Text(
+                            widget.isRoot ? '親投稿' : '返信',
+                            style: Theme.of(context)
+                                .textTheme
+                                .labelLarge
+                                ?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                          ),
+                          Text(
+                            _formatDateTime(widget.message.createdAt),
+                            style: Theme.of(context)
+                                .textTheme
+                                .labelSmall
+                                ?.copyWith(
+                                  color: Colors.black45,
+                                ),
+                          ),
                         ],
-                        if (message.text.isNotEmpty)
-                          Text(
-                            message.text,
-                            style: const TextStyle(height: 1.5),
+                      ),
+                      const SizedBox(height: 4),
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: widget.isRoot
+                              ? colorScheme.primaryContainer.withAlpha(120)
+                              : const Color(0xFFF7F7FB),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
                           ),
-                        if (message.text.isEmpty && message.imagePath != null)
-                          Text(
-                            '画像を送信',
-                            style: Theme.of(context).textTheme.bodySmall,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (widget.message.imagePath != null) ...[
+                                _MessageImage(path: widget.message.imagePath!),
+                                if (widget.message.text.isNotEmpty)
+                                  const SizedBox(height: 10),
+                              ],
+                              if (widget.message.text.isNotEmpty)
+                                Text(
+                                  widget.message.text,
+                                  style: const TextStyle(height: 1.5),
+                                ),
+                              if (widget.message.text.isEmpty &&
+                                  widget.message.imagePath != null)
+                                Text(
+                                  '画像を送信',
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                            ],
                           ),
-                      ],
-                    ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
-          ),
-        ],
+            Positioned(
+              top: -10,
+              right: 0,
+              child: IgnorePointer(
+                ignoring: !_isHovered,
+                child: AnimatedOpacity(
+                  opacity: _isHovered ? 1 : 0,
+                  duration: const Duration(milliseconds: 120),
+                  child: _HoverActionBar(
+                    actions: [
+                      _HoverActionItem(
+                        icon: Icons.edit_outlined,
+                        label: '編集',
+                        onTap: () {
+                          widget.onEdit();
+                        },
+                      ),
+                      _HoverActionItem(
+                        icon: Icons.delete_outline_rounded,
+                        label: '削除',
+                        isDestructive: true,
+                        onTap: () {
+                          widget.onDelete();
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-enum _MessageMenuAction { edit, delete }
+class _HoverActionBar extends StatelessWidget {
+  const _HoverActionBar({required this.actions});
+
+  final List<_HoverActionItem> actions;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(
+            color: Color.fromRGBO(0, 0, 0, 0.12),
+            blurRadius: 18,
+            offset: Offset(0, 6),
+          ),
+        ],
+        border: Border.all(color: Colors.black12),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: actions
+              .map(
+                (action) => Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                  child: TextButton.icon(
+                    onPressed: action.onTap,
+                    style: TextButton.styleFrom(
+                      foregroundColor: action.isDestructive
+                          ? Colors.redAccent
+                          : const Color(0xFF2A2340),
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
+                    ),
+                    icon: Icon(action.icon, size: 16),
+                    label: Text(action.label),
+                  ),
+                ),
+              )
+              .toList(),
+        ),
+      ),
+    );
+  }
+}
+
+class _HoverActionItem {
+  const _HoverActionItem({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.isDestructive = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool isDestructive;
+}
+
+enum SendShortcutMode {
+  enter,
+  shiftEnter;
+
+  String get storageValue => switch (this) {
+        SendShortcutMode.enter => 'enter',
+        SendShortcutMode.shiftEnter => 'shift_enter',
+      };
+
+  String get menuLabel => switch (this) {
+        SendShortcutMode.enter => 'Enterで送信',
+        SendShortcutMode.shiftEnter => 'Shift+Enterで送信',
+      };
+
+  String get helperText => switch (this) {
+        SendShortcutMode.enter => 'Enterで送信 / Shift+Enterで改行',
+        SendShortcutMode.shiftEnter => 'Shift+Enterで送信 / Enterで改行',
+      };
+
+  TextInputAction get textInputAction => switch (this) {
+        SendShortcutMode.enter => TextInputAction.send,
+        SendShortcutMode.shiftEnter => TextInputAction.newline,
+      };
+
+  static SendShortcutMode fromStorageValue(String? value) {
+    return switch (value) {
+      'shift_enter' => SendShortcutMode.shiftEnter,
+      _ => SendShortcutMode.enter,
+    };
+  }
+}
+
+Map<ShortcutActivator, VoidCallback> buildSendShortcutBindings({
+  required SendShortcutMode mode,
+  required Future<void> Function() onSend,
+}) {
+  return {
+    SingleActivator(
+      LogicalKeyboardKey.enter,
+      shift: mode == SendShortcutMode.shiftEnter,
+    ): () {
+      onSend();
+    },
+  };
+}
+
+KeyEventResult handleComposerKeyEvent({
+  required SendShortcutMode mode,
+  required KeyEvent event,
+  required TextEditingController controller,
+  required Future<void> Function() onSend,
+}) {
+  if (event is! KeyDownEvent) {
+    return KeyEventResult.ignored;
+  }
+
+  final isEnter = event.logicalKey == LogicalKeyboardKey.enter ||
+      event.logicalKey == LogicalKeyboardKey.numpadEnter;
+  if (!isEnter) {
+    return KeyEventResult.ignored;
+  }
+
+  final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+
+  if (mode == SendShortcutMode.enter) {
+    if (isShiftPressed) {
+      insertNewlineAtSelection(controller);
+    } else {
+      onSend();
+    }
+    return KeyEventResult.handled;
+  }
+
+  if (isShiftPressed) {
+    onSend();
+    return KeyEventResult.handled;
+  }
+
+  return KeyEventResult.ignored;
+}
+
+void insertNewlineAtSelection(TextEditingController controller) {
+  final selection = controller.selection;
+  final text = controller.text;
+  final start = selection.start >= 0 ? selection.start : text.length;
+  final end = selection.end >= 0 ? selection.end : text.length;
+  final newText = text.replaceRange(start, end, '\n');
+  final offset = start + 1;
+  controller.value = TextEditingValue(
+    text: newText,
+    selection: TextSelection.collapsed(offset: offset),
+  );
+}
 
 List<MemoMessage> rootMessagesForNote(MemoNote note) {
   final roots =

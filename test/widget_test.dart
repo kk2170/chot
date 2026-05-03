@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ui' show PointerDeviceKind;
 
 import 'package:chot/main.dart';
 import 'package:flutter/material.dart';
@@ -17,6 +18,53 @@ void main() {
 
     expect(find.text('chot · ノート 1'), findsOneWidget);
     expect(find.text('ノート 1 にメッセージを書く...'), findsOneWidget);
+    expect(find.text('Enterで送信 / Shift+Enterで改行'), findsOneWidget);
+  });
+
+  testWidgets('changes send shortcut mode and persists it', (tester) async {
+    await tester.pumpWidget(const ChotApp());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('送信キー設定'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Shift+Enterで送信').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Shift+Enterで送信 / Enterで改行'), findsOneWidget);
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('chot_send_shortcut_v1'), 'shift_enter');
+  });
+
+  testWidgets(
+      'default shortcut sends on Enter and inserts newline on Shift+Enter',
+      (tester) async {
+    await tester.pumpWidget(const ChotApp());
+    await tester.pumpAndSettle();
+
+    final fieldFinder = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          widget.decoration?.hintText == 'ノート 1 にメッセージを書く...',
+    );
+
+    await tester.tap(fieldFinder);
+    await tester.pump();
+    await tester.enterText(fieldFinder, '1行目');
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+
+    final field = tester.widget<TextField>(fieldFinder);
+    expect(field.controller?.text, '1行目\n');
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(find.text('1行目'), findsOneWidget);
+    expect(tester.widget<TextField>(fieldFinder).controller?.text, isEmpty);
   });
 
   testWidgets('loads multiple notes from local storage', (tester) async {
@@ -138,7 +186,7 @@ void main() {
     await tester.tap(find.text('返信 1件'));
     await tester.pumpAndSettle();
 
-    expect(find.text('スレッド'), findsOneWidget);
+    expect(find.text('スレッド'), findsAtLeastNWidgets(1));
     expect(find.text('資料は最新版です'), findsAtLeastNWidgets(1));
   });
 
@@ -162,7 +210,13 @@ void main() {
     await tester.tap(find.byIcon(Icons.arrow_upward_rounded).first);
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('スレッドを開始'));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer();
+    await mouse.moveTo(tester.getCenter(find.text('親投稿').last));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('スレッド開始'));
     await tester.pumpAndSettle();
 
     await tester.enterText(
@@ -207,9 +261,12 @@ void main() {
     await tester.tap(find.byIcon(Icons.arrow_upward_rounded).first);
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('投稿メニュー'));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer();
+    await mouse.moveTo(tester.getCenter(find.text('元の投稿')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('編集'));
+    await tester.tap(find.text('編集').last);
     await tester.pumpAndSettle();
 
     final dialogTextField = find.descendant(
@@ -242,7 +299,10 @@ void main() {
     await tester.pumpWidget(const ChotApp());
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('投稿メニュー'));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer();
+    await mouse.moveTo(tester.getCenter(find.text('親投稿')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('削除'));
     await tester.pumpAndSettle();
@@ -277,9 +337,12 @@ void main() {
     await tester.tap(find.text('返信 1件'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('スレッドメッセージメニュー').last);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer();
+    await mouse.moveTo(tester.getCenter(find.text('元の返信').last));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('編集'));
+    await tester.tap(find.text('編集').last);
     await tester.pumpAndSettle();
 
     final dialogTextField = find.descendant(
@@ -398,7 +461,8 @@ void main() {
       SystemChannels.platform,
       (call) async {
         if (call.method == 'Clipboard.setData') {
-          clipboardText = (call.arguments as Map<Object?, Object?>)['text'] as String?;
+          clipboardText =
+              (call.arguments as Map<Object?, Object?>)['text'] as String?;
         }
         return null;
       },
